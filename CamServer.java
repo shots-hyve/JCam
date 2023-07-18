@@ -1,32 +1,41 @@
+package jcam;
+
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.*;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Scanner;
-/**
- *
- * @author Allan Ayes
- */
-public class CameraServer {
 
-    private static ArrayList<Camera> cameras;
+public class JCamara {
+
+    private static ArrayList<Camera> cameras = new ArrayList<>();
+    private static Map<String, Boolean> desiredMacAddress = new HashMap<>();
+
+    private static String StrimHexCad(String cad) {
+        return cad.replaceAll(" ", "").trim();
+    }
 
     public static void main(String[] args) {
-        boolean keepRun = true;
-        int opc = -1;
+        // Desired MAC addresses: Ever Sparkle Technologies Ltd
+        desiredMacAddress.put("00:1e:b5:84:8f:01", Boolean.FALSE);
+        desiredMacAddress.put("f8:da:c:7d:e9:2f", Boolean.FALSE); 
+        
         Scanner in = new Scanner(System.in);
-        while (keepRun) {
+        while (true) {
             System.out.println("--- MENU ---");
-            System.out.println("1. set Station Mode");
-            System.out.println("2. connect to camera");
-            System.out.println("0. exit the program");
-            opc = in.nextInt();
+            System.out.println("1. Set Station Mode");
+            System.out.println("2. Connect to Camera");
+            System.out.println("0. Exit the program");
+            int opc = in.nextInt();
             switch (opc) {
                 case 0:
-                    System.exit(opc);
+                    System.exit(0);
                     break;
                 case 1:
                     System.out.println("Type the ESSID");
@@ -36,43 +45,85 @@ public class CameraServer {
 
                     System.out.println("Waiting for device");
 
-                    if (setStationMode(essid, pass) == true) {
+                    if (setStationMode(essid, pass)) {
                         System.out.println("Station Mode Activated");
                     } else {
                         System.out.println("Waiting...");
                     }
                     break;
                 case 2:
-                    try {
                     discoverCameras();
-
                     if (cameras.isEmpty()) {
-                        System.out.println("No cameras detected\nExiting the program!");
-                        System.exit(0);
+                        System.out.println("No cameras detected!");
+                        System.out.println("Do you want exit? Y o N");
+
+                        if (in.next().equalsIgnoreCase("y")) {
+                            System.out.println("Exiting the program!");
+                            System.exit(0);
+                        } else {
+                            System.out.println("If you know there is a camera online, enter the IP address:");
+                            String ipCam = in.next();
+                            if (isAnIP(ipCam)) {
+                                System.out.println("Enter the name of the camera, please:");
+                                String nCam = in.next();
+                                System.out.println("Trying to connect to " + nCam + " on: " + ipCam);
+                                try {
+                                    initiateCameraSTMode(nCam, ipCam);
+                                } catch (IOException ex) {
+                                    System.out.println("IOE: " + ex.getMessage());
+                                }
+                            } else {
+                                System.out.println("This app is not a chatbot, I'm not programmed to know what you think.\nThe program will exit now!");
+                                System.exit(0);
+                            }
+                        }
+                    } else {
+                        System.out.println("Please select the camera to work with:");
+                        for (Camera cam : cameras) {
+                            System.out.println(cameras.indexOf(cam) + ". " + cam.toString());
+                        }
+                        String selectedCam = in.next();
+                        try {
+                            int option = Integer.parseInt(selectedCam);
+                            Camera myCam = cameras.get(option);
+                            if (myCam.ip.equals("192.168.4.153")) {
+                                System.out.println("This camera is on AP mode");
+                                initiateCameraAPMode(myCam.getName(), myCam.ip);
+                            } else {
+                                System.out.println("Trying to connect with " + myCam.getName());
+                                initiateCameraSTMode(myCam.getName(), myCam.ip);
+                            }
+                        } catch (NumberFormatException ex) {
+                            System.out.println("NFE: " + ex.getMessage());
+                        } finally {
+                            continue;
+                        }
                     }
                     System.out.println("Camera available!");
-                    ServerSocket serverSocket = new ServerSocket(8081);
-                    System.out.println("Server started at http://127.0.0.1:8081/cam.html");
-
-                    while (true) {
-                        Socket clientSocket = serverSocket.accept();
-                        ClientHandler clientHandler = new ClientHandler(clientSocket);
-                        Thread clientThread = new Thread(clientHandler);
-                        clientThread.start();
+                    for (Camera cam : cameras) {
+                        System.out.println("Camera: " + cam.getName() + " on: " + cam.ip);
                     }
-                } catch (IOException e) {
-                    System.out.println(e.getMessage());
-                }
-                break;
+                    try {
+                        ServerSocket serverSocket = new ServerSocket(8081);
+                        System.out.println("Server started at http://127.0.0.1:8081/cam.html");
+
+                        while (true) {
+                            Socket clientSocket = serverSocket.accept();
+                            Thread clientThread = new Thread(new ClientHandler(clientSocket));
+                            clientThread.start();
+                        }
+                    } catch (IOException e) {
+                        System.out.println(e.getMessage());
+                    }
+                    break;
                 default:
                     System.out.println("Command not available!");
             }
-
         }
     }
 
-    private static void initiateCamera(String name, String ip, DatagramSocket socket) throws IOException {
-
+    private static void initiateCameraAPMode(String name, String ip) throws IOException {
+        DatagramSocket socket = new DatagramSocket();
         byte[] buffer = new byte[2];
         InetAddress address = InetAddress.getByName(ip);
         int port = 8070;
@@ -90,9 +141,31 @@ public class CameraServer {
         buffer[1] = (byte) 0x76;
         socket.send(new DatagramPacket(buffer, buffer.length, address, port));
 
-        //cameras.clear(); // to avoid duplicating data
         Camera camera = new Camera(name, ip, socket);
         cameras.add(camera);
+    }
+
+    private static void initiateCameraSTMode(String nCam, String ip) throws IOException {
+
+        DatagramSocket socket = new DatagramSocket();
+        byte[] buffer = new byte[2];
+        InetAddress address = InetAddress.getByName(ip);
+        int port = 12476;
+        buffer[0] = (byte) 0x30;
+        buffer[1] = (byte) 0x67;
+        socket.send(new DatagramPacket(buffer, buffer.length, address, port));
+
+        buffer[0] = (byte) 0x30;
+        buffer[1] = (byte) 0x66;
+        socket.send(new DatagramPacket(buffer, buffer.length, address, port));
+
+        port = 32108;
+        buffer[0] = (byte) 0x42;
+        buffer[1] = (byte) 0x76;
+        socket.send(new DatagramPacket(buffer, buffer.length, address, port));
+        buffer = hexToAscii("5d782818").getBytes();
+        socket.send(new DatagramPacket(buffer, buffer.length, address, port));
+
     }
 
     private static boolean setStationMode(String essid, String pass) {
@@ -120,8 +193,6 @@ public class CameraServer {
                     return true;
                 }
             }
-        } catch (SocketException | UnknownHostException ex) {
-            System.out.println(ex.getMessage());
         } catch (IOException ex) {
             System.out.println(ex.getMessage());
         }
@@ -155,62 +226,116 @@ public class CameraServer {
         return output.toString().toUpperCase();
     }
 
-    private static void discoverCameras() {
-        // Scan the network for cameras with the name "rtthread"
+    private static void sendData(String data, String hostname, int rport) {
         try {
-            DatagramSocket socket = new DatagramSocket();
-            socket.setBroadcast(true);
-            socket.setSoTimeout(1000);
-            initiateCamera("ACCQ495869RFVSV", "192.168.4.153", socket);
+            DatagramSocket sock = new DatagramSocket();
+            sock.setSoTimeout(500);
+            byte[] sdata = data.getBytes();
+            sock.send(new DatagramPacket(sdata, sdata.length, new InetSocketAddress(hostname, rport)));
 
-            /*byte[] buffer = new byte[1024];
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-            InetAddress broadcastAddress = getBroadcastAddress();
-
-            String discoveryMessage = "rtthread";//"DISCOVER_RTTHREAD_CAMERAS";
-            DatagramPacket discoveryPacket = new DatagramPacket(discoveryMessage.getBytes(), discoveryMessage.length(), broadcastAddress, 8081);
-            socket.send(discoveryPacket);
-            
-            while (true) {
-                try {
-                    socket.receive(packet);
-
-                    String response = new String(packet.getData(), 0, packet.getLength());
-                    if (response.startsWith("rtthread")) {
-                        String name = response.substring("rtthread:".length());
-                        String ip = packet.getAddress().getHostAddress();
-                        System.out.println("Discovered Camera: " + name + " at IP: " + ip);
-                        initiateCamera(name, ip, socket);
-                    }
-
-                } catch (SocketTimeoutException e) {
-                    break;  // Timeout reached, stop receiving packets
-                }
+            byte[] buf = new byte[Byte.MAX_VALUE];
+            DatagramPacket rdp = new DatagramPacket(buf, buf.length);
+            sock.receive(rdp);
+            String response = new String(rdp.getData(), 0, rdp.getLength());
+            if (!response.isEmpty()) {
+                System.out.println("Response data: " + response);
+                System.out.println("Hex data: " + asciiToHex(response));
             }
-
-            socket.close();*/
-        } catch (IOException e) {
-            System.out.println(e.getMessage());
+        } catch (IOException ex) {
+            //System.out.println(ex.getMessage());
         }
     }
 
-    private static InetAddress getBroadcastAddress() throws IOException {
-        InetAddress myIp = null;
-        Enumeration<NetworkInterface> ni = NetworkInterface.getNetworkInterfaces();
-        while (ni.hasMoreElements()) {
-            NetworkInterface mni = ni.nextElement();
-            if (mni.isUp()) {
-                Enumeration<InetAddress> ia = mni.getInetAddresses();
-                while (ia.hasMoreElements()) {
-                    InetAddress mia = ia.nextElement();
-                    if (mia.isSiteLocalAddress()) {
+    // validating if are correct
+    private static boolean isAnIP(String ip) {
 
-                        myIp = mia;
+        if (ip.contains(".") && ip.split("\\.").length == 4) {
+            String[] parts = ip.split("\\.");
+            for (String part : parts) {
+                try {
+                    int value = Integer.parseInt(part);
+                    if (value < 0 || value > 255) {
+                        return false;
                     }
+                } catch (NumberFormatException e) {
+                    return false;
                 }
             }
+            return true;
         }
-        return myIp;
+        return false;
+    }
+
+    private static String checkIP(String ip) {
+        return ip.replace('(', ' ').replace(')', ' ').trim();
+    }
+
+    private static String checkMac(String mac) {
+        String[] parts = mac.split(":");
+        String nMac = "";
+        for (String part : parts) {
+            if (part.length() == 2) {
+                nMac += part + ":";
+            } else {
+                nMac += "0" + part + ":";
+            }
+        }
+        nMac = nMac.substring(0, nMac.length() - 1);
+        return nMac;
+    }
+
+    private static void discoverCameras() {
+
+        int intervalSeconds = 10; // Intervalo de detección en segundos
+        boolean running = true;
+
+        while (running) {
+            try {
+                Process process = Runtime.getRuntime().exec("arp -a");
+
+                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                String line;
+                System.out.println("--- ARP Table ---\n");
+                while ((line = reader.readLine()) != null) {
+                    // Filtrar las líneas que contienen información de la tabla ARP
+
+                    if (line.contains("dynamic") || line.contains("ifscope")) {
+                        String[] parts = line.split("\\s+");
+                        String ipAddress = checkIP(parts[1]);
+                        String macAddress = checkMac(parts[3]);
+
+                        for (Map.Entry<String, Boolean> entry : desiredMacAddress.entrySet()) {
+                            String mac = entry.getKey();
+
+                            if (macAddress.equalsIgnoreCase(mac)) {
+                                System.out.println("¡Se ha detectado el equipo con la dirección MAC deseada!");
+                                System.out.println("Dirección IP: " + ipAddress);
+                                System.out.println("Dirección MAC: " + macAddress);
+                                // Realiza las acciones necesarias cuando se detecta el equipo
+                                desiredMacAddress.replace(mac, Boolean.TRUE);
+                                Camera camera = new Camera(macAddress, ipAddress, new DatagramSocket());
+                                cameras.add(camera);
+                            }
+                        }
+                    }
+                }
+
+                reader.close();
+                // Realiza las acciones necesarias cuando el equipo no está conectado
+                if (desiredMacAddress.containsValue(Boolean.FALSE)) {
+                    running = false;
+                }
+                /*for (Map.Entry<String, Boolean> e : desiredMacAddress.entrySet()) {
+                    if (!e.getValue()) {
+                        System.out.println("El equipo con la dirección MAC: " + e.getKey() + " no está conectado.");
+                    }
+                }*/
+
+                Thread.sleep(intervalSeconds * 1000);
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     private static boolean isImageStart(byte[] buffer) {
@@ -254,41 +379,41 @@ public class CameraServer {
         public void run() {
             try {
                 String clientAddress = clientSocket.getInetAddress().getHostAddress();
+                String cameraName = "";//"ACCQ495869RFVSV";//getCameraByName(cameraName);
+                for (Camera camera : cameras) {
 
-                //String cameraName = clientSocket.getInputStream().toString().split("\n")[0].split(" ")[1].replace("/", "");
-                String cameraName = "ACCQ495869RFVSV";
-                Camera camera = getCameraByName(cameraName);
+                    if (camera != null) {
+                        InputStream inputStream = clientSocket.getInputStream();
+                        OutputStream outputStream = clientSocket.getOutputStream();
+                        System.out.println("Data streaming...");
+                        outputStream.write(("HTTP/1.1 200 OK\r\n"
+                                + "Content-type: multipart/x-mixed-replace; boundary=--jpgboundary\r\n"
+                                + "\r\n").getBytes());
 
-                if (camera != null) {
-                    InputStream inputStream = clientSocket.getInputStream();
-                    OutputStream outputStream = clientSocket.getOutputStream();
+                        while (true) {
+                            byte[] buffer = new byte[4096];
+                            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                            camera.getSocket().receive(packet);
 
-                    outputStream.write(("HTTP/1.1 200 OK\r\n"
-                            + "Content-type: multipart/x-mixed-replace; boundary=--jpgboundary\r\n"
-                            + "\r\n").getBytes());
+                            buffer = packet.getData();
 
-                    while (true) {
-                        byte[] buffer = new byte[4096];
-                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                        camera.getSocket().receive(packet);
+                            if (isImageStart(buffer)) {
+                                camera.setFrame(Arrays.copyOfRange(buffer, 8, buffer.length));
+                            } else {
+                                byte[] newFrame = new byte[camera.getFrame().length + buffer.length];
+                                System.arraycopy(camera.getFrame(), 0, newFrame, 0, camera.getFrame().length);
+                                System.arraycopy(buffer, 0, newFrame, camera.getFrame().length, buffer.length);
+                                camera.setFrame(newFrame);
+                            }
 
-                        buffer = packet.getData();
-
-                        if (isImageStart(buffer)) {
-                            camera.setFrame(Arrays.copyOfRange(buffer, 8, buffer.length));
-                        } else {
-                            byte[] newFrame = new byte[camera.getFrame().length + buffer.length];
-                            System.arraycopy(camera.getFrame(), 0, newFrame, 0, camera.getFrame().length);
-                            System.arraycopy(buffer, 0, newFrame, camera.getFrame().length, buffer.length);
-                            camera.setFrame(newFrame);
+                            if (isImageEnd(buffer)) {
+                                sendImage(clientSocket, camera.getFrame());
+                            }
                         }
-
-                        if (isImageEnd(buffer)) {
-                            sendImage(clientSocket, camera.getFrame());
-                        }
+                    } else {
+                        clientSocket.close();
+                        System.out.println("Data streaming closed");
                     }
-                } else {
-                    clientSocket.close();
                 }
             } catch (IOException e) {
                 System.out.println(e.getMessage());
@@ -336,4 +461,3 @@ public class CameraServer {
         }
     }
 }
-
